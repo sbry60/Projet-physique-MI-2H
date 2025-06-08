@@ -1,0 +1,94 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.linalg import eigh_tridiagonal  # Import manquant
+from scipy.signal import find_peaks
+
+# ==============================================
+# PARAMÈTRES PHYSIQUES
+# ==============================================
+V0 = -50.0  # Profondeur du puits (négative pour un puits attractif)
+a = 1.0      # Largeur du puits
+m = 1.0      # Masse effective
+hbar = 1.0   # Constante réduite
+
+# ==============================================
+# 1. CALCUL DES ÉTATS LIÉS (E < 0)
+# ==============================================
+def calculate_bound_states():
+    """Calcule les énergies des états liés dans le puits"""
+    N = 1000  # Nombre de points de discrétisation
+    x = np.linspace(-2*a, 2*a, N)
+    dx = x[1] - x[0]
+    
+    # Potentiel
+    V = np.zeros(N)
+    V[(x > -a/2) & (x < a/2)] = V0
+    
+    # Hamiltonien (forme tridiagonale)
+    diag = np.ones(N)/dx**2 + V
+    off_diag = -np.ones(N-1)/(2*dx**2)
+    
+    # Résolution
+    eigenvalues, _ = eigh_tridiagonal(diag, off_diag)
+    return eigenvalues[eigenvalues < 0]  # Seulement les états liés
+
+# ==============================================
+# 2. COEFFICIENT DE TRANSMISSION (E > 0)
+# ==============================================
+def transmission_coefficient(E):
+    """Calcule T(E) pour E > 0"""
+    k = np.sqrt(2*m*(E - V0))/hbar
+    return 1/(1 + (V0**2 * np.sin(k*a)**2)/(4*E*(E - V0)))
+
+# ==============================================
+# 3. EXÉCUTION PRINCIPALE
+# ==============================================
+# Calcul des états liés
+try:
+    bound_states = calculate_bound_states()
+    print("États liés calculés:", bound_states)
+except Exception as e:
+    print("Erreur dans calculate_bound_states():", e)
+    bound_states = []
+
+# Calcul de la transmission
+E_range = np.linspace(1, 100, 1000)
+T_values = np.array([transmission_coefficient(E) for E in E_range])
+
+# Détection des pics
+peaks, _ = find_peaks(T_values, height=0.95)
+peak_energies = E_range[peaks]
+
+# Prédictions théoriques
+n_values = np.arange(1, 5)
+predicted_peaks = [(n*np.pi*hbar)**2/(2*m*a**2) - V0 for n in n_values]
+
+# ==============================================
+# VISUALISATION
+# ==============================================
+plt.figure(figsize=(12, 6))
+
+# Courbe de transmission
+plt.plot(E_range, T_values, label='T(E)')
+plt.scatter(peak_energies, T_values[peaks], color='red', label='Pics expérimentaux')
+
+# Prédictions théoriques
+for n, E_pred in zip(n_values, predicted_peaks):
+    plt.axvline(E_pred, color='k', linestyle='--', alpha=0.3)
+    plt.text(E_pred, 0.05, f'n={n}', ha='center', bbox=dict(facecolor='white', alpha=0.7))
+
+# États liés convertis
+if len(bound_states) > 0:
+    for i, E in enumerate(bound_states):
+        E_conv = -E - V0  # Conversion pour comparaison
+        plt.axvline(E_conv, color='green', linestyle=':', alpha=0.3)
+        plt.text(E_conv, 0.1, f'État {i+1}', ha='center', color='green')
+
+plt.xlabel('Énergie (E)')
+plt.ylabel('Transmission (T)')
+plt.ylim(0, 1.1)
+plt.title('Effet Ramsauer-Townsend\n(Lignes noires: prédictions théoriques)')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()

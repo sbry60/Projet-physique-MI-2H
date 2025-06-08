@@ -1,0 +1,91 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.constants import hbar, m_e
+from scipy.optimize import bisect
+
+# Constantes
+V_0 = -5e-18  # Profondeur du puits de potentiel (en joules)
+a = 1e-9  # Largeur du puits (en mètres)
+
+# Equations transcendantes
+def equation_paire(k, V_0, a):
+    E = (hbar**2 * k**2) / (2 * m_e) + V_0
+    if E < 0:
+        kappa = np.sqrt(-2 * m_e * E) / hbar
+        return k * np.tan(k * a / 2) - kappa
+    return np.inf
+
+def equation_impaire(k, V_0, a):
+    E = (hbar**2 * k**2) / (2 * m_e) + V_0
+    if E < 0:
+        kappa = np.sqrt(-2 * m_e * E) / hbar
+        return k / np.tan(k * a / 2) + kappa
+    return np.inf
+
+# Trouver les zéros des équations avec scipy.optimize.bisect
+def find_roots(equation, V_0, a, k_min, k_max, tol=1e-6, max_iter=100):
+    roots = []
+    k_values = np.linspace(k_min, k_max, 1000)
+    
+    for i in range(len(k_values)-1):
+        k1, k2 = k_values[i], k_values[i+1]
+        try:
+            root = bisect(lambda k: equation(k, V_0, a), k1, k2, 
+                         xtol=tol, maxiter=max_iter)
+            roots.append(root)
+        except:
+            continue
+    
+    # Éliminer les doublons
+    roots = np.unique(np.round(roots, int(-np.log10(tol))))
+    return roots
+
+# Plage de recherche pour k (ajustée)
+k_min = 1e8  # Valeur minimale réduite
+k_max = 2e10  # Valeur maximale ajustée
+
+# Recherche des racines
+k_values_paires = find_roots(equation_paire, V_0, a, k_min, k_max)
+k_values_impaires = find_roots(equation_impaire, V_0, a, k_min, k_max)
+
+print("Valeurs de k pour les solutions paires:", k_values_paires)
+print("Valeurs de k pour les solutions impaires:", k_values_impaires)
+
+# Calcul des énergies
+E_values_paires = [(hbar**2 * k**2) / (2 * m_e) + V_0 for k in k_values_paires]
+E_values_impaires = [(hbar**2 * k**2) / (2 * m_e) + V_0 for k in k_values_impaires]
+
+print("\nNiveaux d'énergie paires (J):", E_values_paires)
+print("Niveaux d'énergie impaires (J):", E_values_impaires)
+print("\nNiveaux d'énergie paires (eV):", np.array(E_values_paires)/1.602e-19)
+print("Niveaux d'énergie impaires (eV):", np.array(E_values_impaires)/1.602e-19)
+
+# Tracé des fonctions d'onde
+x = np.linspace(-2*a, 2*a, 1000)
+plt.figure(figsize=(10, 6))
+
+for i, k in enumerate(k_values_paires[:2]):
+    E = (hbar**2 * k**2) / (2 * m_e) + V_0
+    kappa = np.sqrt(-2 * m_e * E) / hbar
+    psi_inside = np.cos(k * x)
+    psi_outside = np.cos(k*a/2) * np.exp(-kappa*(np.abs(x) - a/2))
+    psi = np.where(np.abs(x) < a/2, psi_inside, psi_outside)
+    psi /= np.max(np.abs(psi))  # Normalisation
+    plt.plot(x/a, psi, '--', label=f'Paire E{i+1} = {E/1.602e-19:.2f} eV')
+
+for i, k in enumerate(k_values_impaires[:2]):
+    E = (hbar**2 * k**2) / (2 * m_e) + V_0
+    kappa = np.sqrt(-2 * m_e * E) / hbar
+    psi_inside = np.sin(k * x)
+    psi_outside = np.sign(x) * np.sin(k*a/2) * np.exp(-kappa*(np.abs(x) - a/2))
+    psi = np.where(np.abs(x) < a/2, psi_inside, psi_outside)
+    psi /= np.max(np.abs(psi))  # Normalisation
+    plt.plot(x/a, psi, '-', label=f'Impaire E{i+1} = {E/1.602e-19:.2f} eV')
+
+plt.title("Fonctions d'onde dans un puits carré fini", fontsize=14)
+plt.xlabel("Position x/a", fontsize=12)
+plt.ylabel("ψ(x) (normalisée)", fontsize=12)
+plt.legend(fontsize=10)
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()

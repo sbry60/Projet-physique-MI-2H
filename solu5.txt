@@ -1,0 +1,372 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from scipy.integrate import solve_ivp
+import warnings
+warnings.filterwarnings('ignore')
+
+class WavePacketSimulation:
+    """
+    Simulation de la propagation d'un paquet d'ondes à travers un puits de potentiel
+    pour l'étude de l'effet Ramsauer-Townsend
+    """
+    
+    def __init__(self, L=20, N=2048, V0=10, a=2, hbar=1, m=1):
+        """
+        Paramètres:
+        L: longueur du domaine spatial
+        N: nombre de points de discrétisation
+        V0: profondeur du puits de potentiel
+        a: largeur du puits
+        hbar, m: constantes physiques (normalisées)
+        """
+        self.L = L
+        self.N = N
+        self.V0 = V0
+        self.a = a
+        self.hbar = hbar
+        self.m = m
+        
+        # Grille spatiale
+        self.dx = L / N
+        self.x = np.linspace(-L/2, L/2, N)
+        
+        # Potentiel
+        self.V = np.zeros(N)
+        mask = np.abs(self.x) < a/2
+        self.V[mask] = -V0
+        
+    def potential(self, x):
+        """Fonction potentiel"""
+        return -self.V0 if abs(x) < self.a/2 else 0
+    
+    def create_wave_packet(self, x0=-8, k0=3, sigma=1):
+        """
+        Création d'un paquet d'ondes gaussien
+        x0: position initiale du centre
+        k0: nombre d'onde central
+        sigma: largeur du paquet
+        """
+        self.x0 = x0
+        self.k0 = k0
+        self.sigma = sigma
+        
+        # Paquet d'ondes gaussien
+        gaussian = np.exp(-(self.x - x0)**2 / (2 * sigma**2))
+        phase = np.exp(1j * k0 * self.x)
+        
+        # Normalisation
+        psi = gaussian * phase
+        norm = np.trapz(np.abs(psi)**2, self.x)
+        psi = psi / np.sqrt(norm)
+        
+        return psi
+    
+    def hamiltonian_action(self, psi):
+        """
+        Application de l'opérateur hamiltonien H = -ℏ²/(2m) d²/dx² + V(x)
+        """
+        # Terme cinétique par différences finies
+        d2psi_dx2 = np.zeros_like(psi)
+        d2psi_dx2[1:-1] = (psi[2:] - 2*psi[1:-1] + psi[:-2]) / self.dx**2
+        
+        # Conditions aux bords (onde sortante)
+        d2psi_dx2[0] = d2psi_dx2[1]
+        d2psi_dx2[-1] = d2psi_dx2[-2]
+        
+        # Hamiltonien total
+        H_psi = -self.hbar**2 / (2 * self.m) * d2psi_dx2 + self.V * psi
+        
+        return H_psi
+    
+    def time_evolution_rk4(self, psi, dt):
+        """
+        Évolution temporelle par méthode Runge-Kutta d'ordre 4
+        """
+        def dpsi_dt(psi):
+            return -1j / self.hbar * self.hamiltonian_action(psi)
+        
+        k1 = dt * dpsi_dt(psi)
+        k2 = dt * dpsi_dt(psi + k1/2)
+        k3 = dt * dpsi_dt(psi + k2/2)
+        k4 = dt * dpsi_dt(psi + k3)
+        
+        return psi + (k1 + 2*k2 + 2*k3 + k4) / 6
+    
+    def calculate_transmission_coefficient(self, psi, x_boundary=5):
+        """
+        Calcul du coefficient de transmission en intégrant |ψ|² à droite du puits
+        """
+        mask_transmitted = self.x > x_boundary
+        prob_transmitted = np.trapz(np.abs(psi[mask_transmitted])**2, 
+                                  self.x[mask_transmitted])
+        return prob_transmitted
+    
+    def calculate_reflection_coefficient(self, psi, x_boundary=-5):
+        """
+        Calcul du coefficient de réflexion en intégrant |ψ|² à gauche du puits
+        """
+        mask_reflected = self.x < x_boundary
+        prob_reflected = np.trapz(np.abs(psi[mask_reflected])**2, 
+                                self.x[mask_reflected])
+        return prob_reflected
+    
+    def analytical_transmission(self, E):
+        """
+        Coefficient de transmission analytique pour une onde plane
+        """
+        if E <= 0:
+            return 0
+        
+        k = np.sqrt(2 * self.m * (E + self.V0)) / self.hbar
+        
+        if E + self.V0 <= 0:
+            return 0
+            
+        T = 1 / (1 + (self.V0**2 * np.sin(k * self.a)**2) / 
+                 (4 * E * (E + self.V0)))
+        return T
+    
+    def run_simulation(self, total_time=8, dt=0.01, save_interval=10):
+        """
+        Exécution de la simulation complète
+        """
+        # Initialisation du paquet d'ondes
+        psi = self.create_wave_packet()
+        
+        # Paramètres temporels
+        n_steps = int(total_time / dt)
+        times = []
+        psi_history = []
+        transmission_history = []
+        reflection_history = []
+        
+        print("Démarrage de la simulation...")
+        print(f"Énergie moyenne du paquet: {self.k0**2 * self.hbar**2 / (2 * self.m):.2f}")
+        print(f"Coefficient de transmission analytique: {self.analytical_transmission(self.k0**2 * self.hbar**2 / (2 * self.m)):.3f}")
+        
+        # Boucle d'évolution temporelle
+        for i in range(n_steps):
+            if i % save_interval == 0:
+                times.append(i * dt)
+                psi_history.append(psi.copy())
+                
+                # Calcul des coefficients
+                T = self.calculate_transmission_coefficient(psi)
+                R = self.calculate_reflection_coefficient(psi)
+                transmission_history.append(T)
+                reflection_history.append(R)
+                
+                if i % (save_interval * 20) == 0:
+                    print(f"t = {i*dt:.1f}, T = {T:.3f}, R = {R:.3f}, Conservation = {T+R:.3f}")
+            
+            # Évolution temporelle
+            psi = self.time_evolution_rk4(psi, dt)
+        
+        return (np.array(times), np.array(psi_history), 
+                np.array(transmission_history), np.array(reflection_history))
+    
+    def plot_results(self, times, psi_history, transmission_history, reflection_history):
+        """
+        Visualisation des résultats
+        """
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # 1. Évolution du paquet d'ondes
+        ax1 = axes[0, 0]
+        for i in range(0, len(times), len(times)//5):
+            prob_density = np.abs(psi_history[i])**2
+            ax1.plot(self.x, prob_density, label=f't = {times[i]:.1f}', alpha=0.7)
+        
+        # Potentiel
+        ax1_twin = ax1.twinx()
+        ax1_twin.plot(self.x, self.V, 'k--', alpha=0.5, label='Potentiel')
+        ax1_twin.set_ylabel('V(x)', color='k')
+        
+        ax1.set_xlabel('Position x')
+        ax1.set_ylabel('|ψ(x,t)|²')
+        ax1.set_title('Évolution du paquet d\'ondes')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. Coefficients de transmission et réflexion
+        ax2 = axes[0, 1]
+        ax2.plot(times, transmission_history, 'b-', label='Transmission', linewidth=2)
+        ax2.plot(times, reflection_history, 'r-', label='Réflexion', linewidth=2)
+        ax2.plot(times, transmission_history + reflection_history, 'g--', 
+                label='Conservation', alpha=0.7)
+        
+        # Ligne de référence analytique
+        E_mean = self.k0**2 * self.hbar**2 / (2 * self.m)
+        T_analytical = self.analytical_transmission(E_mean)
+        ax2.axhline(y=T_analytical, color='orange', linestyle=':', 
+                   label=f'T analytique = {T_analytical:.3f}')
+        
+        ax2.set_xlabel('Temps')
+        ax2.set_ylabel('Probabilité')
+        ax2.set_title('Évolution des coefficients T et R')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim(0, 1.1)
+        
+        # 3. Densité de probabilité finale
+        ax3 = axes[1, 0]
+        final_psi = psi_history[-1]
+        ax3.plot(self.x, np.abs(final_psi)**2, 'b-', linewidth=2, label='|ψ(x,t_final)|²')
+        ax3.plot(self.x, np.real(final_psi), 'r--', alpha=0.7, label='Re(ψ)')
+        ax3.plot(self.x, np.imag(final_psi), 'g--', alpha=0.7, label='Im(ψ)')
+        
+        # Potentiel
+        ax3_twin = ax3.twinx()
+        ax3_twin.plot(self.x, self.V, 'k--', alpha=0.5)
+        ax3_twin.set_ylabel('V(x)', color='k')
+        
+        ax3.set_xlabel('Position x')
+        ax3.set_ylabel('ψ(x)')
+        ax3.set_title('État final du paquet d\'ondes')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # 4. Analyse spectrale
+        ax4 = axes[1, 1]
+        
+        # Transformée de Fourier du paquet initial
+        initial_psi = psi_history[0]
+        k_space = np.fft.fftfreq(self.N, self.dx) * 2 * np.pi
+        psi_k = np.fft.fft(initial_psi)
+        
+        # Centrer autour de k=0
+        idx_sort = np.argsort(k_space)
+        k_space_sorted = k_space[idx_sort]
+        psi_k_sorted = psi_k[idx_sort]
+        
+        ax4.plot(k_space_sorted, np.abs(psi_k_sorted)**2, 'b-', linewidth=2)
+        ax4.axvline(x=self.k0, color='red', linestyle='--', label=f'k₀ = {self.k0}')
+        ax4.set_xlabel('Nombre d\'onde k')
+        ax4.set_ylabel('|ψ̃(k)|²')
+        ax4.set_title('Spectre du paquet d\'ondes initial')
+        ax4.set_xlim(-1, 8)
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return fig
+
+def study_energy_dependence():
+    """
+    Étude de la dépendance en énergie - recherche de l'effet Ramsauer-Townsend
+    """
+    print("\n=== ÉTUDE DE LA DÉPENDANCE EN ÉNERGIE ===")
+    
+    # Paramètres du système
+    V0 = 8.0
+    a = 2.0
+    k_values = np.linspace(0.5, 6, 50)
+    energies = k_values**2 / 2  # E = ℏ²k²/(2m) avec ℏ=m=1
+    
+    transmission_coeffs = []
+    
+    for k0 in k_values:
+        sim = WavePacketSimulation(V0=V0, a=a)
+        
+        # Énergie correspondante
+        E = k0**2 / 2
+        
+        # Coefficient analytique
+        T_analytical = sim.analytical_transmission(E)
+        transmission_coeffs.append(T_analytical)
+    
+    # Recherche des minima (effet Ramsauer-Townsend)
+    transmission_coeffs = np.array(transmission_coeffs)
+    
+    # Trouver les minima locaux
+    from scipy.signal import find_peaks
+    peaks, _ = find_peaks(-transmission_coeffs, height=-0.8, distance=5)
+    
+    plt.figure(figsize=(12, 8))
+    
+    plt.subplot(2, 1, 1)
+    plt.plot(k_values, transmission_coeffs, 'b-', linewidth=2, label='Coefficient de transmission')
+    
+    # Marquer les minima
+    if len(peaks) > 0:
+        plt.plot(k_values[peaks], transmission_coeffs[peaks], 'ro', 
+                markersize=8, label='Minima (Effet Ramsauer-Townsend)')
+        
+        for i, peak in enumerate(peaks):
+            plt.annotate(f'k = {k_values[peak]:.2f}\nT = {transmission_coeffs[peak]:.3f}',
+                        xy=(k_values[peak], transmission_coeffs[peak]),
+                        xytext=(10, 10), textcoords='offset points',
+                        bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                        arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    
+    plt.xlabel('Nombre d\'onde k')
+    plt.ylabel('Coefficient de transmission T')
+    plt.title(f'Effet Ramsauer-Townsend - Puits de profondeur V₀ = {V0}, largeur a = {a}')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.ylim(0, 1)
+    
+    # Condition de résonance théorique
+    plt.subplot(2, 1, 2)
+    k_theory = np.pi * np.arange(1, 6) / a  # ka = nπ
+    E_theory = k_theory**2 / 2
+    
+    plt.axhline(y=1, color='green', linestyle='--', alpha=0.7, label='Transmission parfaite')
+    
+    for i, k_th in enumerate(k_theory):
+        if k_th <= k_values.max():
+            plt.axvline(x=k_th, color='red', linestyle=':', alpha=0.7,
+                       label='Résonance théorique' if i == 0 else '')
+            plt.text(k_th, 0.9, f'k = {k_th:.2f}', rotation=90, 
+                    verticalalignment='bottom', fontsize=8)
+    
+    plt.plot(k_values, transmission_coeffs, 'b-', linewidth=2)
+    plt.xlabel('Nombre d\'onde k')
+    plt.ylabel('Coefficient de transmission T')
+    plt.title('Comparaison avec les conditions de résonance théoriques (ka = nπ)')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.ylim(0, 1.1)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return k_values, transmission_coeffs
+
+# Fonction principale de démonstration
+def main():
+    """
+    Fonction principale - démonstration complète
+    """
+    print("=== SIMULATION DE PAQUETS D'ONDES - EFFET RAMSAUER-TOWNSEND ===\n")
+    
+    # Cas 1: Transmission élevée (résonance)
+    print("1. Cas de transmission élevée (près d'une résonance)")
+    sim1 = WavePacketSimulation(V0=8, a=2)
+    k_resonance = np.pi / sim1.a  # Première résonance ka = π
+    sim1.k0 = k_resonance
+    
+    times1, psi_hist1, T_hist1, R_hist1 = sim1.run_simulation(total_time=6)
+    fig1 = sim1.plot_results(times1, psi_hist1, T_hist1, R_hist1)
+    plt.suptitle('Cas 1: Transmission élevée (k ≈ π/a)', fontsize=16)
+    
+    # Cas 2: Transmission faible (minimum)
+    print("\n2. Cas de transmission faible (minimum de transmission)")
+    sim2 = WavePacketSimulation(V0=8, a=2)
+    sim2.k0 = 2.0  # Valeur donnant une transmission faible
+    
+    times2, psi_hist2, T_hist2, R_hist2 = sim2.run_simulation(total_time=6)
+    fig2 = sim2.plot_results(times2, psi_hist2, T_hist2, R_hist2)
+    plt.suptitle('Cas 2: Transmission faible', fontsize=16)
+    
+    # Étude systématique
+    print("\n3. Étude systématique de la dépendance en énergie")
+    k_vals, T_vals = study_energy_dependence()
+    
+    return sim1, sim2, (k_vals, T_vals)
+
+if __name__ == "__main__":
+    results = main()

@@ -1,0 +1,76 @@
+import numpy as np
+from scipy.linalg import solve_banded
+import matplotlib.pyplot as plt
+
+# Paramètres physiques
+V0 = -50.0    # Profondeur du puits (négative)
+a = 1.0       # Largeur du puits
+m = 1.0       # Masse effective
+hbar = 1.0    # Constante réduite
+
+# =================================================================
+# 1. SOLUTION ANALYTIQUE
+# =================================================================
+def analytic_transmission(E):
+    k = np.sqrt(2*m*(E - V0))/hbar
+    return 1/(1 + (V0**2 * np.sin(k*a)**2)/(4*E*(E - V0)))
+
+# =================================================================
+# 2. SOLUTION NUMÉRIQUE (Corrigée)
+# =================================================================
+def numerical_transmission(E, L=10*a, N=1000):
+    """Calcule T(E) numériquement avec la bonne structure de matrice bande"""
+    # Discrétisation spatiale
+    x = np.linspace(-L/2, L/2, N)
+    dx = x[1] - x[0]
+    
+    # Construction du potentiel
+    V = np.zeros(N)
+    V[(x > -a/2) & (x < a/2)] = V0
+    
+    # Construction de la matrice bande (format requis par solve_banded)
+    diagonal = 1/dx**2 + V - 2*m*E/hbar**2
+    lower = -1/(2*dx**2) * np.ones(N-1)
+    upper = lower.copy()
+    
+    # Format bande spécifique pour solve_banded:
+    # ab[u + i - j, j] == a[i,j] (forme (u + l + 1, M))
+    ab = np.zeros((3, N))  # 1 diagonale sup + 1 diagonale principale + 1 diagonale inf
+    ab[0, 1:] = upper      # Bande supérieure (décalée vers la droite)
+    ab[1, :] = diagonal    # Diagonale principale
+    ab[2, :-1] = lower     # Bande inférieure (décalée vers la gauche)
+    
+    # Condition source (onde plane incidente)
+    k0 = np.sqrt(2*m*E)/hbar
+    psi_inc = np.exp(1j*k0*x)
+    
+    # Résolution
+    psi = solve_banded((1, 1), ab, psi_inc)
+    
+    # Coefficient de transmission
+    T = np.abs(psi[-1]/psi[0])**2
+    return T
+
+# =================================================================
+# 3. COMPARAISON (avec moins de points pour tester)
+# =================================================================
+E_range = np.linspace(10, 100, 10)  # 10 points pour test rapide
+print("Calcul en cours...")
+
+T_analytic = np.array([analytic_transmission(E) for E in E_range])
+T_numeric = np.array([numerical_transmission(E) for E in E_range])
+
+# Affichage
+plt.figure(figsize=(10, 6))
+plt.plot(E_range, T_analytic, 'bo-', label='Analytique')
+plt.plot(E_range, T_numeric, 'rx--', label='Numérique')
+plt.xlabel('Énergie (E)')
+plt.ylabel('Transmission (T)')
+plt.legend()
+plt.grid(True)
+plt.title('Comparaison solutions analytique/numérique\n(Pour validation rapide)')
+plt.show()
+
+# Calcul de l'erreur moyenne
+error = np.mean(np.abs(T_numeric - T_analytic))
+print(f"Erreur moyenne absolue: {error:.2e}")
